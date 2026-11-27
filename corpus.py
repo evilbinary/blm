@@ -82,6 +82,8 @@ def iter_texts(path: str, max_chars: int | None = None):
                 continue
             if isinstance(obj, dict):
                 t = obj.get("text") or "\n".join(c for _, c in _turns_of(obj))
+                if not t and obj.get("answer"):
+                    t = f"{obj.get('question', '')}\n{obj['answer']}"
             else:
                 t = ""
             if not t:
@@ -92,25 +94,70 @@ def iter_texts(path: str, max_chars: int | None = None):
                 return
 
 
+def train_bpe_texts(texts, vocab_size: int = 32000):
+    """在文本流上训 ByteLevel BPE，special 固定为 0–5。"""
+    from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+
+    from .vocab import BPEVocab, SPECIALS
+
+    tok = Tokenizer(models.BPE(unk_token="<unk>"))
+    tok.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tok.decoder = decoders.ByteLevel()
+    tr = trainers.BpeTrainer(
+        vocab_size=vocab_size, special_tokens=SPECIALS, min_frequency=2,
+        show_progress=False,
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet())
+    tok.train_from_iterator(texts, tr)
+    return BPEVocab(tok)
+
+
+def train_bpe(path: str, vocab_size: int = 32000, out: str | None = None,
+              max_docs: int | None = None, max_chars: int | None = None) -> "BPEVocab":
+    """在语料上训 BPE 并写 tokenizer.json + vocab.json。"""
+    def it():
+        for i, t in enumerate(iter_texts(path, max_chars)):
+            if max_docs and i >= max_docs:
+                return
+            yield t
+
+    vocab = train_bpe_texts(it(), vocab_size)
+    if out:
+        vocab.save(os.path.join(out, "vocab.json"))
+    return vocab
+
+
 def build_corpus(vocab: Vocab, path: str = CORPUS_SRC,
                  max_chars: int = 2_000_000, verbose: bool = True) -> np.ndarray:
-    """字符流 -> token ids。分块转 numpy，避免几十 GB 的 Python int 对象。"""
-    stoi = vocab.stoi
-    unk = vocab.stoi.get("<unk>", 1)
+    """文本流 -> token ids（字符级 / BPE 通用），分块转 numpy 控制内存。"""
+    stoi = getattr(vocab, "stoi", None)
+    if stoi is not None:
+        unk = stoi.get("<unk>", 1)
+
+        def _ids(t: str) -> np.ndarray:
+            return np.fromiter((stoi.get(c, unk) for c in t),
+                               dtype=np.int32, count=len(t))
+    else:
+        def _ids(t: str) -> np.ndarray:
+            ids = vocab.encode(t)
+            return np.fromiter(ids, dtype=np.int32, count=len(ids))
+
     chunks: list[np.ndarray] = []
     n = 0
+    mark = 50_000_000
     for t in iter_texts(path, max_chars):
-        chunks.append(np.fromiter((stoi.get(c, unk) for c in t),
-                                  dtype=np.int32, count=len(t)))
-        n += len(t)
-        if verbose and n >= 50_000_000 and n % 50_000_000 < 1000:
-            print(f"[corpus] {n / 1e6:.0f}M chars", flush=True)
+        c = _ids(t)
+        chunks.append(c)
+        n += len(c)
+        if verbose and n >= mark:
+            print(f"[corpus] {n / 1e6:.0f}M tokens", flush=True)
+            mark += 50_000_000
         if n >= max_chars:
             break
     if not chunks:
-        return np.zeros(0, dtype=np.int32)
+        return np.zeros(0, dtype=np.uint16)
     arr = np.concatenate(chunks)
-    return arr[:max_chars].astype(np.int32, copy=False)
+    dtype = np.uint16 if len(vocab) < 65536 else np.int32
+    return arr[:max_chars].astype(dtype, copy=False)
 
 
 def _read_conversations(path: str) -> list[list[tuple[str, str]]]:
@@ -469,11 +516,28 @@ def mine_reconstruct_pairs(pairs: list[tuple[str, str]],
     return out
 
 
+def _char_span_to_tokens(offsets, start: int, end: int) -> tuple[int, int] | None:
+    """字符区间 [start, end) → 覆盖它的 token 下标区间 [t0, t1)。"""
+    t0 = t1 = None
+    for t, (s, e) in enumerate(offsets):
+        if e <= start:
+            continue
+        if s >= end:
+            break
+        if t0 is None:
+            t0 = t
+        t1 = t + 1
+    if t0 is None:
+        return None
+    return t0, t1
+
+
 def _rec_sample(vocab: Vocab, ctx: int, q1: str, a1: str, q2: str, a2: str,
                 min_block: int = 3) -> dict | None:
     """`<bos><u>Q1<a>A1<eos><u>Q2<a>A2<eos>` + 目标位置→源位置的对齐标注。"""
     q1_ids, q2_ids = vocab.encode(q1), vocab.encode(q2)
-    a1_ids, a2_ids = vocab.encode(a1), vocab.encode(a2)
+    a1_ids, a1_off = vocab.encode_offsets(a1)
+    a2_ids, a2_off = vocab.encode_offsets(a2)
     ids: list[int] = [BOS]
     lm: list[float] = [0.0]
     role: list[int] = [-1]
@@ -498,14 +562,23 @@ def _rec_sample(vocab: Vocab, ctx: int, q1: str, a1: str, q2: str, a2: str,
         return None
 
     n = len(ids) - 1
-    align = np.full(n, -100, dtype=np.int64)    # x 下标 → 源字符 x 下标
+    align = np.full(n, -100, dtype=np.int64)    # x 下标 → 源 token 下标
     gtg = np.full(n, -100.0, dtype=np.float32)  # 门控目标：1=该抄的片段
     for si, ti, size in answer_align(a1, a2, min_block):
-        for d in range(size):
-            if ti + d >= len(a2_ids):
-                continue
-            p = tgt_start + ti + d - 1
-            align[p] = src_start + si + d
+        s_span = _char_span_to_tokens(a1_off, si, si + size)
+        t_span = _char_span_to_tokens(a2_off, ti, ti + size)
+        if s_span is None or t_span is None:
+            continue
+        s0, s1 = s_span
+        t0, t1 = t_span
+        ns, nt = s1 - s0, t1 - t0
+        for k in range(nt):
+            if t0 + k >= len(a2_ids):
+                break
+            # 源/目标 token 数一致时 1:1，否则按比例线性映射
+            src_tok = s0 + (k if ns == nt else min(int(k * ns / max(nt, 1)), ns - 1))
+            p = tgt_start + t0 + k - 1
+            align[p] = src_start + src_tok
             gtg[p] = 1.0
     for p in range(n):
         if lm[p + 1] > 0 and gtg[p] < 0:

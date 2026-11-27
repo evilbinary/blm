@@ -12,7 +12,7 @@ import random
 import torch
 
 from ..vocab import A, BOS, U
-from .sample import (build_retrieval, load_memory_pairs, load_model, reply,
+from .sample import (build_retrieval, ckpt_path, load_memory_pairs, load_model, reply,
                      retrieval_prefix)
 
 PROMPTS = [
@@ -30,9 +30,7 @@ PROMPTS = [
 def run(max_new: int = 60, temp: float = 0.8, ckpt: str | None = None,
         memory: bool = False, n_mem: int = 6) -> None:
     model, vocab = load_model(ckpt)
-    path = ckpt or os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "artifacts", "ckpt.pt")
+    path = ckpt_path(ckpt)
     step = torch.load(path, map_location="cpu", weights_only=False).get("step")
     print(f"[eval] ckpt step={step} mode={'memory' if memory else 'plain'}")
 

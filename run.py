@@ -24,6 +24,8 @@ def main() -> None:
                     help="构建检索式记忆样本 dialogues_mem.pt（配合 --dialogues-only）")
     pp.add_argument("--reconstruct", action="store_true",
                     help="构建重构样本 dialogues_rec.pt（近似问法 + span 对齐）")
+    pp.add_argument("--bpe", type=int, default=0,
+                    help=">0 时改用 BPE 词表（如 32000）；配合 --corpus-only 只训分词器")
 
     pt = sub.add_parser("train", help="训练")
     pt.add_argument("--stage", choices=["lm", "joint"], default="lm")
@@ -66,7 +68,7 @@ def main() -> None:
     a = p.parse_args()
     if a.cmd == "prep":
         trainer.prep(a.max_chars, a.min_freq, a.dialogues_only, a.corpus_only,
-                     a.memory, a.reconstruct)
+                     a.memory, a.reconstruct, a.bpe)
     elif a.cmd == "train":
         shape = {k: v for k, v in (("d", a.d), ("n_layer", a.n_layer),
                                    ("n_head", a.n_head)) if v}

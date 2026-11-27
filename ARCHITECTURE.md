@@ -800,4 +800,64 @@ span 字占目标 43.6%。样本 `<bos><u>Q1<a>A1<eos><u>Q2<a>A2<eos>`，检索�
   内部 `Memory` 只学语义读法，两者不混。
 
 
+## 21. 词表可切换：字符级 / BPE（`--bpe`）
+
+### 21.1 为什么加
+
+字级词表把 52 个拉丁字母和 31 个数字都作为单 token，模型在分布外会逐字母拼出
+伪英语（`novarites`、`ghymoucal`），这是"夹拉丁碎片"的结构性原因；同时中文
+1 字 = 1 token，序列效率低 1.5–2 倍。故把词表抽象成接口，支持 BPE。
+
+### 21.2 接口
+
+`vocab.py` 两个实现同一套方法：`encode / encode_offsets / decode / __len__ / save`。
+
+| 实现 | 说明 |
+|---|---|
+| `Vocab` | 字符级，`kind="char"`，`encode_offsets` 返回 `(i, i+1)` |
+| `BPEVocab` | HF tokenizers ByteLevel BPE，`kind="bpe"`，读写 `tokenizer.json` |
+
+- special 固定 id 0–5（`<pad> <unk> <bos> <eos> <u> <a>`），与 `vocab.py` 里
+  `PAD/UNK/BOS/EOS/U/A` 常量、所有 role/lm 标签一致；
+- `vocab.json` 用 `kind` 字段区分，`Vocab.load` 自动分发，训练/推理/评估命令不变；
+- 训练分词器：`python -m blm.run prep --corpus-only --bpe 32000`。
+
+### 21.3 关键修复：span 对齐不再假设"字符下标 = token 下标"
+
+E1b 的 `_rec_sample` 原来用 `align[p] = src_start + si + d` 直接拿字符偏移当 token
+下标，BPE 下会错位。现在：
+
+1. LCS 仍在字符域（`answer_align` 不变）；
+2. 用 `encode_offsets` 把 LCS 的字符区间映射成源/目标两侧的 token 区间
+   （`_char_span_to_tokens`）；
+3. 两侧 token 数相同则 1:1 对齐，不同则按比例线性映射（同一子串通常切分相同，
+   实测 9/9 字符区间一致）。
+
+### 21.4 其他配套
+
+- `build_corpus` 按 `vocab.encode` 编码（字符级走快速路径），vocab < 65536 时
+  存 **uint16**，体积减半；
+- `iter_texts` 兼容 `{"text"}` / `{"conversations"}` / `{"question","answer"}` 三种；
+- 修复 `eval` 打印的 step 取错路径的问题（之前固定读 `e7/artifacts/ckpt.pt`，
+  用 `E7_ARTIFACTS` 时会显示别的模型的 step）。
+
+### 21.5 单测（本地，真实 my.jsonl）
+
+| 项 | 结果 |
+|---|---|
+| special id | 0–5 正确 |
+| 往返 `decode(encode(t)) == t` | 200/200 一致 |
+| 压缩率（vocab 2000） | 0.875 token/字（32k 预期 ~0.6） |
+| 重构 span 字符区间一致 | 9/9 |
+| `corpus.npy` dtype | uint16 |
+| 端到端 `prep --bpe` → `train` → `eval` | 跑通 |
+
+### 21.6 边界
+
+- 字符级与 BPE 产物互不兼容，换词表必须整套重建且不能 `--resume` 旧 ckpt；
+- BPE 首 token 可能是半个 UTF-8 字符，单 token `decode` 会出 `�`，整段 decode 正常；
+- ctx 仍按 token 计，BPE 下 192 token ≈ 320 字，多轮对话仍偏短（建议后续 512）。
+
+
+
 

@@ -16,7 +16,7 @@ from .brain import (BrainNet, Config, conf_loss, intent_loss, lm_loss,
                     load_state_compat, role_loss)
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ART = os.path.join(HERE, "artifacts")
+ART = os.environ.get("E7_ARTIFACTS", os.path.join(HERE, "artifacts"))
 SMALL = {"d": 96, "n_layer": 2, "n_head": 2, "ctx": 64}
 BIG = {"d": 384, "n_layer": 6, "n_head": 6, "ctx": 192}
 
@@ -35,7 +35,8 @@ def _paths() -> dict:
 
 def prep(max_chars: int = 2_000_000, min_freq: int = 2,
          dialogues_only: bool = False, corpus_only: bool = False,
-         memory: bool = False, reconstruct: bool = False) -> None:
+         memory: bool = False, reconstruct: bool = False,
+         bpe: int = 0) -> None:
     os.makedirs(ART, exist_ok=True)
     p = _paths()
     if dialogues_only:
@@ -60,28 +61,42 @@ def prep(max_chars: int = 2_000_000, min_freq: int = 2,
         print(f"[prep] dialogues={len(samples)} (vocab kept {len(vocab)})")
         return
     if corpus_only:
+        if bpe:
+            print(f"[prep] 训练 BPE 词表 vocab={bpe}", flush=True)
+            vocab = C.train_bpe(C.CORPUS_SRC, vocab_size=bpe, out=ART,
+                                max_chars=max_chars)
+            print(f"[prep] BPE vocab={len(vocab)}")
+            return
         vocab = Vocab.load(p["vocab"])
         arr = C.build_corpus(vocab, max_chars=max_chars)
         np.save(p["corpus"], arr)
-        print(f"[prep] corpus={len(arr)} chars (vocab kept {len(vocab)})")
+        print(f"[prep] corpus={len(arr)} tokens (vocab kept {len(vocab)})")
         return
-    texts: list[str] = []
-    seen = 0
-    print(f"[prep] 读语料 {C.CORPUS_SRC}", flush=True)
-    for t in C.iter_texts(C.CORPUS_SRC, max_chars):
-        texts.append(t)
-        seen += len(t)
-        if seen >= 50_000_000 and seen % 50_000_000 < 1000:
-            print(f"[prep] 已读 {seen / 1e6:.0f}M chars", flush=True)
-        if seen >= max_chars:
-            break
-    print(f"[prep] 读对话 {C.MYQA_SRC}", flush=True)
-    convs = C.load_conversations()
-    texts.extend(content for turns in convs for _, content in turns)
-    print(f"[prep] 建词表（{len(texts)} 段，{seen} chars）", flush=True)
-    vocab = Vocab.build(texts, min_freq=min_freq)
-    vocab.save(p["vocab"])
-    del texts
+    if bpe:
+        print(f"[prep] 训练 BPE 词表 vocab={bpe}", flush=True)
+        vocab = C.train_bpe(C.CORPUS_SRC, vocab_size=bpe, out=ART,
+                            max_chars=max_chars)
+        print(f"[prep] BPE vocab={len(vocab)}", flush=True)
+    else:
+        texts: list[str] = []
+        seen = 0
+        mark = 50_000_000
+        print(f"[prep] 读语料 {C.CORPUS_SRC}", flush=True)
+        for t in C.iter_texts(C.CORPUS_SRC, max_chars):
+            texts.append(t)
+            seen += len(t)
+            if seen >= mark:
+                print(f"[prep] 已读 {seen / 1e6:.0f}M chars", flush=True)
+                mark += 50_000_000
+            if seen >= max_chars:
+                break
+        print(f"[prep] 读对话 {C.MYQA_SRC}", flush=True)
+        convs = C.load_conversations()
+        texts.extend(content for turns in convs for _, content in turns)
+        print(f"[prep] 建词表（{len(texts)} 段，{seen} chars）", flush=True)
+        vocab = Vocab.build(texts, min_freq=min_freq)
+        vocab.save(p["vocab"])
+        del texts
     print(f"[prep] 编码语料 -> corpus.npy", flush=True)
 
     arr = C.build_corpus(vocab, max_chars=max_chars)
@@ -242,6 +257,9 @@ def train(stage: str = "lm", steps: int = 300, bs: int = 16, lr: float = 3e-4,
             except ValueError as e:
                 # 新增参数（如 copy_head）后参数组对不上：只能重新累积动量
                 print(f"[resume] 优化器状态不兼容，重新开始累积: {e}")
+        # ckpt 里存着旧的 lr，续训时以命令行为准（否则 --lr 形同虚设）
+        for g in opt.param_groups:
+            g["lr"] = lr
         start = ck.get("step", 0)
         print(f"[resume] step={start}")
 

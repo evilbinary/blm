@@ -13,7 +13,7 @@ from .brain import BrainNet, Config, load_state_compat
 from .retrieval import RetrievalMemory
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ART = os.path.join(HERE, "artifacts")
+ART = os.environ.get("E7_ARTIFACTS", os.path.join(HERE, "artifacts"))
 
 
 def load_memory_pairs() -> list[tuple[str, str]]:
@@ -37,8 +37,12 @@ def retrieval_prefix(vocab: Vocab, mem: RetrievalMemory, query: str,
     return [U, *vocab.encode(query), A, *vocab.encode(ret), EOS], ret
 
 
+def ckpt_path(path: str | None = None) -> str:
+    return path or os.path.join(ART, "ckpt.pt")
+
+
 def load_model(path: str | None = None) -> tuple[BrainNet, Vocab]:
-    path = path or os.path.join(ART, "ckpt.pt")
+    path = ckpt_path(path)
     if not os.path.exists(path):
         raise FileNotFoundError(f"没有训练产物: {path}，先跑 train")
     vocab = Vocab.load(os.path.join(ART, "vocab.json"))

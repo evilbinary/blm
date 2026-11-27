@@ -197,12 +197,13 @@ def conf_loss(out: dict, y: torch.Tensor, mask: torch.Tensor) -> tuple:
         return loss, {"conf_ece": 0.0, "conf_brier": 0.0,
                       "conf_acc": 0.0, "conf_mean": 0.0}
     bins = torch.clamp((c * 10).long(), 0, 9)          # 10 个等宽置信桶
+    cd, okd = c.detach(), ok.detach()
     ece = 0.0
     for b in range(10):
         mb = bins == b
         cnt = int(mb.sum())
         if cnt:
-            ece += (cnt / n) * abs(float(c[mb].mean()) - float(ok[mb].mean()))
+            ece += (cnt / n) * abs(float(cd[mb].mean()) - float(okd[mb].mean()))
     return loss, {
         "conf_ece": float(ece),
         "conf_brier": float(((c - ok) ** 2).mean()),

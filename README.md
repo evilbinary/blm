@@ -81,6 +81,30 @@ python -m blm.run train --stage lm --d 512 --n-layer 8 --n-head 8 \
 口径，32M 参数需要 ~6.5 亿 token ≈ 21 万步（bs16/ctx192）；再大就会欠拟合数据、
 先过拟合那 1.7 万条重构样本。当前数据下建议不超过 32M。
 
+## 切换词表（字符级 / BPE）
+
+默认字符级（1 token = 1 字）。加 `--bpe 32000` 改为 ByteLevel BPE，special 固定占
+id 0–5（`<pad> <unk> <bos> <eos> <u> <a>`），其余 token 从 6 开始。
+
+```bash
+# 只训分词器（CPU，写 artifacts/tokenizer.json + vocab.json）
+python -m blm.run prep --corpus-only --bpe 32000
+
+# 用 BPE 重建全部数据（vocab.json 会带 "kind": "bpe"）
+python -m blm.run prep --bpe 32000 --max-chars 490000000
+python -m blm.run prep --dialogues-only --memory
+python -m blm.run prep --dialogues-only --reconstruct
+```
+
+要点：
+
+- `vocab.json` 的 `kind` 决定加载实现，训练/推理/评估自动识别，不用改命令；
+- 字符级和 BPE 的产物互不兼容，换词表必须整套重建，且不能 `--resume` 旧 ckpt；
+- 用 `E7_ARTIFACTS` 把两套实验分目录，避免互相覆盖；
+- BPE 下 `corpus.npy` 存 uint16（vocab < 65536），体积减半；
+- 重构样本的 span 对齐已按 `encode_offsets` 做字符→token 映射（单测 9/9 命中），
+  不用再假设"字符下标 = token 下标"。
+
 ## 推理
 
 ```bash
