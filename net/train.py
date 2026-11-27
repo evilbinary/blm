@@ -85,12 +85,17 @@ def prep(max_chars: int = 2_000_000, min_freq: int = 2,
           f"dialogues={len(samples)} ctx<=192")
 
 
-def _cfg(vocab: Vocab, small: bool, n_intent: int, big: bool = False) -> Config:
+def _cfg(vocab: Vocab, small: bool, n_intent: int, big: bool = False,
+         shape: dict | None = None) -> Config:
     cfg = Config(vocab_size=len(vocab), n_intent=max(6, n_intent))
     preset = SMALL if small else (BIG if big else None)
     if preset:
         for k, v in preset.items():
             setattr(cfg, k, v)
+    for k, v in (shape or {}).items():
+        setattr(cfg, k, v)
+    if cfg.d % cfg.n_head:
+        raise ValueError(f"d={cfg.d} 不能被 n_head={cfg.n_head} 整除")
     return cfg
 
 
@@ -189,7 +194,8 @@ def _save(model: BrainNet, opt, cfg: Config, step: int, path: str,
 def train(stage: str = "lm", steps: int = 300, bs: int = 16, lr: float = 3e-4,
           small: bool = False, resume: bool = False, seed: int = 0,
           save_every: int = 200, big: bool = False,
-          memory: bool = False, reconstruct: bool = False) -> None:
+          memory: bool = False, reconstruct: bool = False,
+          shape: dict | None = None) -> None:
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -205,7 +211,7 @@ def train(stage: str = "lm", steps: int = 300, bs: int = 16, lr: float = 3e-4,
     plain = torch.load(p["dialogues"], weights_only=False) if reconstruct else []
     intents, labels = C.load_intents(vocab)
 
-    cfg = _cfg(vocab, small, len(labels), big)
+    cfg = _cfg(vocab, small, len(labels), big, shape)
     if memory and cfg.ctx < 192:
         raise ValueError("检索记忆样本按 ctx=192 构建，--memory 不能配 --small")
     if reconstruct and cfg.ctx < 192:

@@ -56,6 +56,27 @@ python -m e7.run train --stage joint --reconstruct --big --resume \
 - 续训 lr 不要超过 5e-5：1.5e-4 实测会把 bpc 从 2.24 抬到 3.2。
 - 产物约 1.5 GB（`corpus.npy` 400MB、`dialogues*.pt` ~400MB、`ckpt.pt` 194MB）。
 
+## 放大模型
+
+`--big` 固定 d384/6 层/6 头（15.4M）。用 `--d` `--n-layer` `--n-head` 覆盖即可放大
+（ctx 保持 192，样本不用重建；尺寸变了就不能 `--resume`）：
+
+| d / L / H | 参数 | 权重+AdamW |
+|---|---|---|
+| 384 / 6 / 6（`--big`） | 15.4M | 0.19 GB |
+| 512 / 8 / 8 | 32.6M | 0.39 GB |
+| 640 / 10 / 10 | 59.8M | 0.72 GB |
+| 768 / 12 / 12 | 99.3M | 1.19 GB |
+
+```bash
+python -m blm.run train --stage lm --d 512 --n-layer 8 --n-head 8 \
+    --steps 20000 --bs 16 --lr 3e-4 --save-every 1000
+```
+
+数据量提醒：语料只有 1 亿字（`--max-chars 100000000`）时，按 20 token/参数 的粗略
+口径，32M 参数需要 ~6.5 亿 token ≈ 21 万步（bs16/ctx192）；再大就会欠拟合数据、
+先过拟合那 1.7 万条重构样本。当前数据下建议不超过 32M。
+
 ## 推理
 
 ```bash

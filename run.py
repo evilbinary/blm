@@ -32,6 +32,9 @@ def main() -> None:
     pt.add_argument("--lr", type=float, default=3e-4)
     pt.add_argument("--small", action="store_true")
     pt.add_argument("--big", action="store_true", help="d=384 / 6 层")
+    pt.add_argument("--d", type=int, default=None, help="覆盖宽度（如 512 / 768）")
+    pt.add_argument("--n-layer", type=int, default=None, help="覆盖层数")
+    pt.add_argument("--n-head", type=int, default=None, help="覆盖头数")
     pt.add_argument("--resume", action="store_true")
     pt.add_argument("--save-every", type=int, default=200)
     pt.add_argument("--memory", action="store_true",
@@ -65,9 +68,11 @@ def main() -> None:
         trainer.prep(a.max_chars, a.min_freq, a.dialogues_only, a.corpus_only,
                      a.memory, a.reconstruct)
     elif a.cmd == "train":
+        shape = {k: v for k, v in (("d", a.d), ("n_layer", a.n_layer),
+                                   ("n_head", a.n_head)) if v}
         trainer.train(a.stage, a.steps, a.bs, a.lr, a.small, a.resume,
                       save_every=a.save_every, big=a.big, memory=a.memory,
-                      reconstruct=a.reconstruct)
+                      reconstruct=a.reconstruct, shape=shape)
     elif a.cmd == "chat":
         sample.chat(a.temp, a.max_new, a.ckpt, a.top_k, a.top_p,
                     a.rep_penalty, a.no_repeat, a.memory)
