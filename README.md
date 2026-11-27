@@ -20,7 +20,14 @@ Python ≥ 3.10，CPU 可跑（慢），GPU 自动使用。
 | 文件 | 说明 |
 |---|---|
 | `data/my.jsonl` | 真实问答，字段 `question` / `answer`，约 27 万条 |
-| `pretrain_t2t_mini.jsonl` | 预训练语料（改 `corpus.py:16` 的 `CORPUS_SRC`） |
+| `pretrain_t2t_mini.jsonl` | 预训练语料（用 `E7_CORPUS` 指定路径，默认是 Windows 本地路径） |
+
+换机器不用改代码，直接给环境变量：
+
+```bash
+export E7_MYQA=/mnt/workspace/blm/data/my.jsonl
+export E7_CORPUS=/mnt/workspace/data/pretrain_t2t_mini.jsonl
+```
 
 `data/`、`artifacts/` 不进仓库。
 

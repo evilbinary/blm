@@ -13,8 +13,11 @@ import numpy as np
 
 from .vocab import A, BOS, EOS, U, Vocab
 
-CORPUS_SRC = r"e:\workspace\yac\app\llm\pretrain_t2t_mini.jsonl"
-DIALOGUE_SRC = r"e:\workspace\yac\app\llm\chat_data.jsonl"
+# 路径可用环境变量覆盖（换机器时不用改代码）：E7_CORPUS / E7_DIALOGUE
+CORPUS_SRC = os.environ.get(
+    "E7_CORPUS", r"e:\workspace\yac\app\llm\pretrain_t2t_mini.jsonl")
+DIALOGUE_SRC = os.environ.get(
+    "E7_DIALOGUE", r"e:\workspace\yac\app\llm\chat_data.jsonl")
 HERE = os.path.dirname(os.path.abspath(__file__))
 LCCC_DIR = os.path.join(HERE, "data", "lccc")
 LCCC_FILES = ("lccc_base_valid.jsonl.gz", "lccc_base_test.jsonl.gz")
@@ -27,7 +30,7 @@ LCCC_MAX_REPLY = 50
 LCCC_AD = ("公众号", "加我", "私聊", "扫码", "代购", "薇信", "威信", "http",
            "www", "兼职", "刷单", "贷款", "加微")
 # A 方案：真实问答对话（question/answer），长回复、有信息量，替代 LCCC。
-MYQA_SRC = os.path.join(HERE, "data", "my.jsonl")
+MYQA_SRC = os.environ.get("E7_MYQA", os.path.join(HERE, "data", "my.jsonl"))
 MYQA_MAX = 50_000
 
 
