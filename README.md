@@ -57,6 +57,8 @@ python -m e7.run train --stage joint --reconstruct --big --resume \
 
 - `--big` = d384/6 层/ctx192；`dialogues_mem.pt`、`dialogues_rec.pt` 按 ctx192 构建，
   `--memory` / `--reconstruct` 不能配 `--small`。
+- 改过 `prep --ctx` 就必须在 train 传同样的 `--ctx`（如 `--ctx 512`），
+  否则样本会被截断到模型 ctx，长对话白建。
 - 续训 lr 不要超过 5e-5：1.5e-4 实测会把 bpc 从 2.24 抬到 3.2。
 - 产物约 1.5 GB（`corpus.npy` 400MB、`dialogues*.pt` ~400MB、`ckpt.pt` 194MB）。
 
@@ -90,11 +92,17 @@ id 0–5（`<pad> <unk> <bos> <eos> <u> <a>`），其余 token 从 6 开始。
 # 只训分词器（CPU，写 artifacts/tokenizer.json + vocab.json）
 python -m blm.run prep --corpus-only --bpe 32000
 
-# 用 BPE 重建全部数据（vocab.json 会带 "kind": "bpe"）
-python -m blm.run prep --bpe 32000 --max-chars 490000000
-python -m blm.run prep --dialogues-only --memory
-python -m blm.run prep --dialogues-only --reconstruct
+# 用 BPE + ctx512 + 全量对话重建全部数据（vocab.json 会带 "kind": "bpe"）
+python -m blm.run prep --bpe 32000 --ctx 512 --max-dialogues 0 --max-chars 490000000
+python -m blm.run prep --dialogues-only --memory --ctx 512 --max-dialogues 0
+python -m blm.run prep --dialogues-only --reconstruct --ctx 512 --max-dialogues 0
+
+# 训练时 ctx 对齐（否则样本被截断）
+python -m blm.run train --stage lm --d 512 --n-layer 8 --n-head 8 --ctx 512 ...
 ```
+
+`--ctx`（默认 192）是对话样本的截断长度，`--max-dialogues`（默认 50000，0=全量）
+是对话条数上限。两者只影响 `prep` 产物，需与训练的 `--ctx` 保持一致。
 
 要点：
 

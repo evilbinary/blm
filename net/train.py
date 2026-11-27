@@ -36,29 +36,32 @@ def _paths() -> dict:
 def prep(max_chars: int = 2_000_000, min_freq: int = 2,
          dialogues_only: bool = False, corpus_only: bool = False,
          memory: bool = False, reconstruct: bool = False,
-         bpe: int = 0) -> None:
+         bpe: int = 0, ctx: int = 192, max_dialogues: int = C.MYQA_MAX) -> None:
     os.makedirs(ART, exist_ok=True)
     p = _paths()
     if dialogues_only:
         vocab = Vocab.load(p["vocab"])
         if reconstruct:
-            samples = C.build_reconstruct_dialogues(vocab, ctx=192)
+            samples = C.build_reconstruct_dialogues(
+                vocab, ctx=ctx, max_dialogues=max_dialogues)
             torch.save(samples, p["dialogues_rec"])
             n_span = sum(int((s["gt_gate"] > 0).sum()) for s in samples)
             n_lm = sum(int(s["lm"].sum()) for s in samples)
             print(f"[prep] reconstruct dialogues={len(samples)} "
                   f"span_ratio={n_span / max(n_lm, 1):.3f} "
-                  f"(vocab kept {len(vocab)})")
+                  f"(vocab kept {len(vocab)}, ctx={ctx})")
             return
         if memory:
-            samples = C.build_memory_dialogues(vocab, ctx=192)
+            samples = C.build_memory_dialogues(
+                vocab, ctx=ctx, max_dialogues=max_dialogues)
             torch.save(samples, p["dialogues_mem"])
             print(f"[prep] memory dialogues={len(samples)} "
-                  f"(vocab kept {len(vocab)})")
+                  f"(vocab kept {len(vocab)}, ctx={ctx})")
             return
-        samples = C.build_dialogues(vocab, ctx=192)
+        samples = C.build_dialogues(vocab, ctx=ctx, max_dialogues=max_dialogues)
         torch.save(samples, p["dialogues"])
-        print(f"[prep] dialogues={len(samples)} (vocab kept {len(vocab)})")
+        print(f"[prep] dialogues={len(samples)} "
+              f"(vocab kept {len(vocab)}, ctx={ctx})")
         return
     if corpus_only:
         if bpe:
@@ -101,10 +104,10 @@ def prep(max_chars: int = 2_000_000, min_freq: int = 2,
 
     arr = C.build_corpus(vocab, max_chars=max_chars)
     np.save(p["corpus"], arr)
-    samples = C.build_dialogues(vocab, ctx=192)
+    samples = C.build_dialogues(vocab, ctx=ctx, max_dialogues=max_dialogues)
     torch.save(samples, p["dialogues"])
-    print(f"[prep] vocab={len(vocab)} corpus={len(arr)} chars "
-          f"dialogues={len(samples)} ctx<=192")
+    print(f"[prep] vocab={len(vocab)} corpus={len(arr)} tokens "
+          f"dialogues={len(samples)} ctx<={ctx}")
 
 
 def _cfg(vocab: Vocab, small: bool, n_intent: int, big: bool = False,
@@ -238,6 +241,10 @@ def train(stage: str = "lm", steps: int = 300, bs: int = 16, lr: float = 3e-4,
         raise ValueError("检索记忆样本按 ctx=192 构建，--memory 不能配 --small")
     if reconstruct and cfg.ctx < 192:
         raise ValueError("重构样本按 ctx=192 构建，--reconstruct 不能配 --small")
+    max_len = max((len(s["x"]) for s in samples), default=0)
+    if max_len > cfg.ctx:
+        print(f"[warn] 样本最长 {max_len} token > ctx={cfg.ctx}，训练会被截断；"
+              f"请加 --ctx {max_len} 并与 prep --ctx 保持一致")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = BrainNet(cfg).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)

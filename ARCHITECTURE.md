@@ -858,6 +858,24 @@ E1b 的 `_rec_sample` 原来用 `align[p] = src_start + si + d` 直接拿字符�
 - BPE 首 token 可能是半个 UTF-8 字符，单 token `decode` 会出 `�`，整段 decode 正常；
 - ctx 仍按 token 计，BPE 下 192 token ≈ 320 字，多轮对话仍偏短（建议后续 512）。
 
+### 21.7 ctx / 对话条数参数化（BPE + ctx512 + 全量对话）
+
+内容质量的两条约束是"视野长度"和"数据量"，都做成参数：
+
+| 参数 | 默认 | 作用 |
+|---|---|---|
+| `prep --ctx` | 192 | 对话样本截断长度；`dialogues` / `dialogues_mem` / `dialogues_rec` 统一用它 |
+| `prep --max-dialogues` | 50000 | 对话条数上限，`0` = 全量 |
+| `train --ctx` | 无 | 覆盖 `cfg.ctx`（走 `shape` 通道），须与 prep 一致 |
+
+- `load_conversations` 把上限透传给 `load_myqa` / `load_sft`，`max_dialogues <= 0`
+  统一表示"不限"（myqa 的 reservoir 分支退化为直接追加）；
+- 记忆/重构样本按 `len(ids) - 1 > ctx` 丢弃，ctx 从 192 提到 512 后保留率显著上升
+  （同样的问答对不再因为"两轮超长"被丢）；
+- `train` 会检查样本最大长度，超过 `cfg.ctx` 时打印 `[warn]`，避免重建了长样本
+  却被 `_dialogue_batch` 静默截回 192。
+
+
 
 
 

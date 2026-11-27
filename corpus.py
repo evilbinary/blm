@@ -236,7 +236,7 @@ def load_lccc(max_dialogues: int = LCCC_MAX,
                 seen.add(key)
                 out.append([("user" if i % 2 == 0 else "assistant", t)
                             for i, t in enumerate(utts)])
-                if len(out) >= max_dialogues:
+                if max_dialogues and len(out) >= max_dialogues:
                     return out
     return out
 
@@ -276,7 +276,7 @@ def load_myqa(max_dialogues: int = MYQA_MAX, min_reply: int = 5,
                 continue
             seen.add(key)
             turns = [("user", q), ("assistant", a)]
-            if len(kept) < max_dialogues:
+            if not max_dialogues or len(kept) < max_dialogues:
                 kept.append(turns)
             else:
                 j = rng.randint(0, len(seen) - 1)
@@ -321,7 +321,7 @@ def load_sft(path: str, max_dialogues: int = MYQA_MAX,
             if any(k in c for _, c in turns for k in LCCC_AD):
                 continue
             out.append(turns)
-            if len(out) >= max_dialogues:
+            if max_dialogues and len(out) >= max_dialogues:
                 break
     return out
 
@@ -331,12 +331,13 @@ def load_conversations(path: str | None = None,
     """对话数据源：自动识别 my.jsonl（question/answer）与 SFT（conversations）。"""
     path = path or MYQA_SRC
     if os.path.exists(path) and _is_sft(path):
-        return load_sft(path)
-    return load_myqa(path=path)
+        return load_sft(path, **kw)
+    return load_myqa(path=path, **kw)
 
 
 def build_dialogues(vocab: Vocab, ctx: int,
-                    path: str | None = None) -> list[dict]:
+                    path: str | None = None,
+                    max_dialogues: int = MYQA_MAX) -> list[dict]:
     """每段对话 -> x / y / lm_mask / role，已按 ctx 截断。
 
     role: 0=用户, 1=助手, 2=收尾(EOS), -100=不计（<bos>）。
@@ -344,7 +345,7 @@ def build_dialogues(vocab: Vocab, ctx: int,
              收尾既要计入 LM（学会停句），又是独立角色类别。
     """
     samples = []
-    for turns in load_conversations(path):
+    for turns in load_conversations(path, max_dialogues=max_dialogues):
         ids: list[int] = [BOS]
         role: list[int] = [-1]              # -1=bos, 0=用户, 1=助手, 2=收尾
         lm: list[float] = [0.0]             # 1=助手内容或收尾
@@ -374,10 +375,11 @@ def build_dialogues(vocab: Vocab, ctx: int,
     return samples
 
 
-def load_qa_pairs(path: str | None = None) -> list[tuple[str, str]]:
+def load_qa_pairs(path: str | None = None,
+                  max_dialogues: int = MYQA_MAX) -> list[tuple[str, str]]:
     """(question, answer) 对：多轮对话取相邻的 user→assistant 轮。"""
     out: list[tuple[str, str]] = []
-    for turns in load_conversations(path):
+    for turns in load_conversations(path, max_dialogues=max_dialogues):
         for i in range(len(turns) - 1):
             if turns[i][0] == "user" and turns[i + 1][0] == "assistant":
                 out.append((turns[i][1], turns[i + 1][1]))
@@ -385,7 +387,8 @@ def load_qa_pairs(path: str | None = None) -> list[tuple[str, str]]:
 
 
 def build_memory_dialogues(vocab: Vocab, ctx: int, path: str | None = None,
-                           max_answer: int = 60) -> list[dict]:
+                           max_answer: int = 60,
+                           max_dialogues: int = MYQA_MAX) -> list[dict]:
     """外部事实记忆样本：`<bos><u>Q<a>RET<eos><u>Q<a>GOLD<eos>`。
 
     RET 取样本自身答案（检索库含自身时 top1 即它，避免标签噪声），只当上下文，
@@ -393,7 +396,7 @@ def build_memory_dialogues(vocab: Vocab, ctx: int, path: str | None = None,
     超 ctx 的样本丢弃（2*|Q| + |RET| + |GOLD| + 7 <= ctx）。
     内部语义记忆（`Memory`）照常由 L 训练；检索本身在推理时跑（`retrieval.py`）。
     """
-    pairs = load_qa_pairs(path)
+    pairs = load_qa_pairs(path, max_dialogues=max_dialogues)
     samples = []
     for q, a in pairs:
         ret = a[:max_answer]
@@ -600,13 +603,15 @@ def build_reconstruct_dialogues(vocab: Vocab, ctx: int,
                                 path: str | None = None,
                                 max_ret: int = 60, max_pairs: int = 20000,
                                 min_keep: float = 0.2,
-                                max_keep: float = 0.5) -> list[dict]:
+                                max_keep: float = 0.5,
+                                max_dialogues: int = MYQA_MAX) -> list[dict]:
     """重构样本：检索轮给真实近似问答，目标轮要求按当前问法重排答案。
 
     与 `build_memory_dialogues` 的区别：那里上下文就是标准答案（抄即最优），
     这里上下文答案与目标答案只共享"该逐字落地"的片段，其余必须改写。
     """
-    items = mine_reconstruct_pairs(load_qa_pairs(path), max_pairs=max_pairs,
+    items = mine_reconstruct_pairs(load_qa_pairs(path, max_dialogues=max_dialogues),
+                                   max_pairs=max_pairs,
                                    min_keep=min_keep, max_keep=max_keep)
     samples = []
     for it in items:

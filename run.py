@@ -26,6 +26,9 @@ def main() -> None:
                     help="构建重构样本 dialogues_rec.pt（近似问法 + span 对齐）")
     pp.add_argument("--bpe", type=int, default=0,
                     help=">0 时改用 BPE 词表（如 32000）；配合 --corpus-only 只训分词器")
+    pp.add_argument("--ctx", type=int, default=192, help="样本上下文长度（token）")
+    pp.add_argument("--max-dialogues", type=int, default=50000,
+                    help="对话样本上限，0=全量")
 
     pt = sub.add_parser("train", help="训练")
     pt.add_argument("--stage", choices=["lm", "joint"], default="lm")
@@ -37,6 +40,8 @@ def main() -> None:
     pt.add_argument("--d", type=int, default=None, help="覆盖宽度（如 512 / 768）")
     pt.add_argument("--n-layer", type=int, default=None, help="覆盖层数")
     pt.add_argument("--n-head", type=int, default=None, help="覆盖头数")
+    pt.add_argument("--ctx", type=int, default=None,
+                    help="覆盖上下文长度（须与 prep --ctx 一致，如 512）")
     pt.add_argument("--resume", action="store_true")
     pt.add_argument("--save-every", type=int, default=200)
     pt.add_argument("--memory", action="store_true",
@@ -68,10 +73,10 @@ def main() -> None:
     a = p.parse_args()
     if a.cmd == "prep":
         trainer.prep(a.max_chars, a.min_freq, a.dialogues_only, a.corpus_only,
-                     a.memory, a.reconstruct, a.bpe)
+                     a.memory, a.reconstruct, a.bpe, a.ctx, a.max_dialogues)
     elif a.cmd == "train":
         shape = {k: v for k, v in (("d", a.d), ("n_layer", a.n_layer),
-                                   ("n_head", a.n_head)) if v}
+                                   ("n_head", a.n_head), ("ctx", a.ctx)) if v}
         trainer.train(a.stage, a.steps, a.bs, a.lr, a.small, a.resume,
                       save_every=a.save_every, big=a.big, memory=a.memory,
                       reconstruct=a.reconstruct, shape=shape)
