@@ -67,15 +67,22 @@ def prep(max_chars: int = 2_000_000, min_freq: int = 2,
         return
     texts: list[str] = []
     seen = 0
+    print(f"[prep] 读语料 {C.CORPUS_SRC}", flush=True)
     for t in C.iter_texts(C.CORPUS_SRC, max_chars):
         texts.append(t)
         seen += len(t)
+        if seen >= 50_000_000 and seen % 50_000_000 < 1000:
+            print(f"[prep] 已读 {seen / 1e6:.0f}M chars", flush=True)
         if seen >= max_chars:
             break
+    print(f"[prep] 读对话 {C.MYQA_SRC}", flush=True)
     convs = C.load_conversations()
     texts.extend(content for turns in convs for _, content in turns)
+    print(f"[prep] 建词表（{len(texts)} 段，{seen} chars）", flush=True)
     vocab = Vocab.build(texts, min_freq=min_freq)
     vocab.save(p["vocab"])
+    del texts
+    print(f"[prep] 编码语料 -> corpus.npy", flush=True)
 
     arr = C.build_corpus(vocab, max_chars=max_chars)
     np.save(p["corpus"], arr)

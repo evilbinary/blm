@@ -93,13 +93,24 @@ def iter_texts(path: str, max_chars: int | None = None):
 
 
 def build_corpus(vocab: Vocab, path: str = CORPUS_SRC,
-                 max_chars: int = 2_000_000) -> np.ndarray:
-    ids: list[int] = []
+                 max_chars: int = 2_000_000, verbose: bool = True) -> np.ndarray:
+    """字符流 -> token ids。分块转 numpy，避免几十 GB 的 Python int 对象。"""
+    stoi = vocab.stoi
+    unk = vocab.stoi.get("<unk>", 1)
+    chunks: list[np.ndarray] = []
+    n = 0
     for t in iter_texts(path, max_chars):
-        ids.extend(vocab.encode(t))
-        if len(ids) >= max_chars:
+        chunks.append(np.fromiter((stoi.get(c, unk) for c in t),
+                                  dtype=np.int32, count=len(t)))
+        n += len(t)
+        if verbose and n >= 50_000_000 and n % 50_000_000 < 1000:
+            print(f"[corpus] {n / 1e6:.0f}M chars", flush=True)
+        if n >= max_chars:
             break
-    return np.asarray(ids[:max_chars], dtype=np.int32)
+    if not chunks:
+        return np.zeros(0, dtype=np.int32)
+    arr = np.concatenate(chunks)
+    return arr[:max_chars].astype(np.int32, copy=False)
 
 
 def _read_conversations(path: str) -> list[list[tuple[str, str]]]:
