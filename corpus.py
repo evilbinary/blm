@@ -34,8 +34,42 @@ MYQA_SRC = os.environ.get("E7_MYQA", os.path.join(HERE, "data", "my.jsonl"))
 MYQA_MAX = 50_000
 
 
+SFT_KEYS = ("conversations", "messages", "conversation")
+_ROLE_MAP = {"assistant": "assistant", "gpt": "assistant", "bot": "assistant",
+             "ai": "assistant", "system": "user"}
+
+
+def _turns_of(obj) -> list[tuple[str, str]]:
+    """把 SFT 记录（`conversations` / `messages`）归一成 [(role, content)]。
+
+    兼容 `{"role","content"}`、`{"from","value"}` 以及 content 为分段列表的形式。
+    """
+    raw = obj
+    if isinstance(obj, dict):
+        for k in SFT_KEYS:
+            if k in obj:
+                raw = obj[k]
+                break
+    if not isinstance(raw, list):
+        return []
+    out: list[tuple[str, str]] = []
+    for t in raw:
+        if not isinstance(t, dict):
+            continue
+        role = str(t.get("role") or t.get("from") or "").lower()
+        content = t.get("content", t.get("value", ""))
+        if isinstance(content, list):
+            content = "".join(p.get("text", "") if isinstance(p, dict) else str(p)
+                              for p in content)
+        content = str(content).strip()
+        if not content:
+            continue
+        out.append((_ROLE_MAP.get(role, "user"), content))
+    return out
+
+
 def iter_texts(path: str, max_chars: int | None = None):
-    """流式读 {"text": ...} 语料，累计到 max_chars 停止。"""
+    """流式读语料：`{"text": ...}` 或 SFT 的 `{"conversations": [...]}`。"""
     n = 0
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -43,9 +77,13 @@ def iter_texts(path: str, max_chars: int | None = None):
             if not line:
                 continue
             try:
-                t = json.loads(line).get("text") or ""
+                obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(obj, dict):
+                t = obj.get("text") or "\n".join(c for _, c in _turns_of(obj))
+            else:
+                t = ""
             if not t:
                 continue
             yield t
@@ -147,7 +185,8 @@ def load_lccc(max_dialogues: int = LCCC_MAX,
 
 def load_myqa(max_dialogues: int = MYQA_MAX, min_reply: int = 5,
               max_reply: int = 300, min_q: int = 2,
-              seed: int = 0) -> list[list[tuple[str, str]]]:
+              seed: int = 0,
+              path: str | None = None) -> list[list[tuple[str, str]]]:
     """真实问答对话（`my.jsonl` 的 question/answer）。
 
     过滤：问题 2 字以上、回复 5–300 字、去广告、精确去重；用 reservoir
@@ -156,9 +195,10 @@ def load_myqa(max_dialogues: int = MYQA_MAX, min_reply: int = 5,
     rng = random.Random(seed)
     kept: list[list[tuple[str, str]]] = []
     seen: set[tuple[str, str]] = set()
-    if not os.path.exists(MYQA_SRC):
+    path = path or MYQA_SRC
+    if not os.path.exists(path):
         return kept
-    with open(MYQA_SRC, encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -187,13 +227,58 @@ def load_myqa(max_dialogues: int = MYQA_MAX, min_reply: int = 5,
     return kept
 
 
-def load_conversations(path: str = DIALOGUE_SRC, **_kw) -> list[list[tuple[str, str]]]:
-    """真实对话数据源：A 方案改为 `my.jsonl` 问答（长回复/有信息量）。"""
-    return load_myqa()
+def _is_sft(path: str) -> bool:
+    """看首条非空记录是不是 `conversations` 这类 SFT 结构。"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                return isinstance(obj, dict) and any(k in obj for k in SFT_KEYS)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return False
+
+
+def load_sft(path: str, max_dialogues: int = MYQA_MAX,
+             max_turns: int = 8) -> list[list[tuple[str, str]]]:
+    """SFT 多轮对话（moss / sft_t2t 的 `conversations`）。
+
+    截前 `max_turns` 轮，丢掉含广告/网址的样本，`max_dialogues` 封顶。
+    """
+    out: list[list[tuple[str, str]]] = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                turns = _turns_of(json.loads(line))[:max_turns]
+            except json.JSONDecodeError:
+                continue
+            if len(turns) < 2:
+                continue
+            if any(k in c for _, c in turns for k in LCCC_AD):
+                continue
+            out.append(turns)
+            if len(out) >= max_dialogues:
+                break
+    return out
+
+
+def load_conversations(path: str | None = None,
+                       **_kw) -> list[list[tuple[str, str]]]:
+    """对话数据源：自动识别 my.jsonl（question/answer）与 SFT（conversations）。"""
+    path = path or MYQA_SRC
+    if os.path.exists(path) and _is_sft(path):
+        return load_sft(path)
+    return load_myqa(path=path)
 
 
 def build_dialogues(vocab: Vocab, ctx: int,
-                    path: str = DIALOGUE_SRC) -> list[dict]:
+                    path: str | None = None) -> list[dict]:
     """每段对话 -> x / y / lm_mask / role，已按 ctx 截断。
 
     role: 0=用户, 1=助手, 2=收尾(EOS), -100=不计（<bos>）。
@@ -231,13 +316,17 @@ def build_dialogues(vocab: Vocab, ctx: int,
     return samples
 
 
-def load_qa_pairs(path: str = DIALOGUE_SRC) -> list[tuple[str, str]]:
-    """真实问答 (question, answer)，来源与 `load_conversations` 一致。"""
-    return [(t[0][1], t[1][1]) for t in load_conversations(path)
-            if len(t) >= 2 and t[0][0] == "user" and t[1][0] == "assistant"]
+def load_qa_pairs(path: str | None = None) -> list[tuple[str, str]]:
+    """(question, answer) 对：多轮对话取相邻的 user→assistant 轮。"""
+    out: list[tuple[str, str]] = []
+    for turns in load_conversations(path):
+        for i in range(len(turns) - 1):
+            if turns[i][0] == "user" and turns[i + 1][0] == "assistant":
+                out.append((turns[i][1], turns[i + 1][1]))
+    return out
 
 
-def build_memory_dialogues(vocab: Vocab, ctx: int, path: str = DIALOGUE_SRC,
+def build_memory_dialogues(vocab: Vocab, ctx: int, path: str | None = None,
                            max_answer: int = 60) -> list[dict]:
     """外部事实记忆样本：`<bos><u>Q<a>RET<eos><u>Q<a>GOLD<eos>`。
 
@@ -424,7 +513,7 @@ def _rec_sample(vocab: Vocab, ctx: int, q1: str, a1: str, q2: str, a2: str,
 
 
 def build_reconstruct_dialogues(vocab: Vocab, ctx: int,
-                                path: str = DIALOGUE_SRC,
+                                path: str | None = None,
                                 max_ret: int = 60, max_pairs: int = 20000,
                                 min_keep: float = 0.2,
                                 max_keep: float = 0.5) -> list[dict]:

@@ -22,6 +22,10 @@ Python ≥ 3.10，CPU 可跑（慢），GPU 自动使用。
 | `data/my.jsonl` | 真实问答，字段 `question` / `answer`，约 27 万条 |
 | `pretrain_t2t_mini.jsonl` | 预训练语料（用 `E7_CORPUS` 指定路径，默认是 Windows 本地路径） |
 
+也支持 SFT 的 `{"conversations": [{"role": ..., "content": ...}]}`（或 `from`/`value`）
+格式，直接把这类文件指给 `E7_MYQA` / `E7_CORPUS` 即可，语料取全部轮次、问答取
+相邻的 user→assistant 轮：
+
 换机器不用改代码，直接给环境变量：
 
 ```bash
